@@ -254,17 +254,18 @@ static int ss_do_segasm(ss_ctx_t *ctx, ss_msghead_t *msghead, void *body)
     int ret = 0;
 
     if (msghead->sop) {
-        if (ctx->segasm.buf) {
-            free(ctx->segasm.buf);
+        if (ctx->u.cli.segasm.buf) {
+            free(ctx->u.cli.segasm.buf);
         }
 
-        ctx->segasm.buf = malloc(msghead->total_len);
-        ctx->segasm.len = msghead->total_len;
+        ctx->u.cli.segasm.buf = malloc(msghead->total_len);
+        ctx->u.cli.segasm.len = msghead->total_len;
 
-        ctx->segasm.cur = ctx->segasm.buf;
+        ctx->u.cli.segasm.cur = ctx->u.cli.segasm.buf;
     }
 
-    memcpy(ctx->segasm.cur, body, msghead->len);
+    memcpy(ctx->u.cli.segasm.cur, body, msghead->len);
+    ctx->u.cli.segasm.cur += msghead->len;
 
     if (msghead->eop) {
         ret = 1;
@@ -442,6 +443,7 @@ static void ss_send_file_res(ss_com_inst_t *inst, ss_filereq_t *filereq)
     fileres->mtime = fstat.st_mtime;
     strcpy(fileres->name, filereq->name);
 
+    memset(&msghead, 0, sizeof(msghead));
     msghead.magic = SS_MSGHEAD_MAGIC;
     msghead.ver = 0;
     msghead.hlen = sizeof(ss_msghead_t);
@@ -505,6 +507,9 @@ static void ss_srv_msgproc(ss_com_inst_t *inst, void *head, void *body)
         printf("\tfilename: %s\n", filereq->name);
 
         ss_send_file_res(inst, filereq);
+
+        ctx->u.srv.n_filereq_recv = 5;
+
         break;
     }
     default:
@@ -529,20 +534,24 @@ static void ss_com_cb_srv(ss_com_inst_t *inst, ss_cbtype_e cbt, void *head, void
     } else if (cbt == SS_CBTYPE_CLOSE) {
 
     } else if (cbt == SS_CBTYPE_TIMER) {
-        if ((path_scan_cycle % SS_PATH_RESCAN_CYCLE) == 0) {
-            if (ctx->dm) {
-                free(ctx->dm);
+        if (ctx->u.srv.n_filereq_recv) {
+            ctx->u.srv.n_filereq_recv--;
+        } else {
+            if ((path_scan_cycle % SS_PATH_RESCAN_CYCLE) == 0) {
+                if (ctx->dm) {
+                    free(ctx->dm);
+                }
+                ctx->dm = path_scan(ctx->localpath, &(ctx->ff));
             }
-            ctx->dm = path_scan(ctx->localpath, &(ctx->ff));
-        }
-        path_scan_cycle++;
+            path_scan_cycle++;
 
-        if (ctx->dm) {
-            ss_dmstate_refresh(ctx, ctx->dm, 1);
+            if (ctx->dm) {
+                ss_dmstate_refresh(ctx, ctx->dm, 1);
 
-            for (i = 0; i < SS_MAX_CLIINST; i++) {
-                if (com->inst_list[i].type == SS_NODE_CLI) {
-                    ss_send_meta_digest(&(com->inst_list[i]), ctx->dm);
+                for (i = 0; i < SS_MAX_CLIINST; i++) {
+                    if (com->inst_list[i].type == SS_NODE_CLI) {
+                        ss_send_meta_digest(&(com->inst_list[i]), ctx->dm);
+                    }
                 }
             }
         }
@@ -580,7 +589,7 @@ static int ss_do_fileupdate(ss_com_inst_t *inst, ss_ctx_t *ctx, ss_dirmeta_t *ol
     ss_filemeta_t *oldfm, *newfm, *oldend, *newend;
 
     SS_ASSERT(inst && ctx && newdm);
-    SS_ASSERT(ctx->n_update == 0);
+    SS_ASSERT(ctx->u.cli.n_update == 0);
 
     printf("old n_file[%3d]--->new n_file[%3d]\n",
         olddm == NULL ? 0 : olddm->n_file,
@@ -636,11 +645,11 @@ __do_filesync:
         ctx->state = SS_STATE_FILE_UPDATE;
         ss_send_file_req(inst, newfm);
         newfm++;
-        ctx->n_update++;
+        ctx->u.cli.n_update++;
     }
 
     /* no file need sync */
-    if (ctx->n_update == 0) {
+    if (ctx->u.cli.n_update == 0) {
         ctx->state = SS_STATE_IDLE;
     }
 
@@ -711,7 +720,7 @@ static void ss_cli_msgproc(ss_com_inst_t *inst, void *head, void *body)
     int ret;
 
     printf("\tcli state[%20s] recv [%s], n_update [%d]\n",
-        g_state_str[ctx->state], g_msgtype_str[msghead->type], ctx->n_update);
+        g_state_str[ctx->state], g_msgtype_str[msghead->type], ctx->u.cli.n_update);
 
     if (msghead->magic != SS_MSGHEAD_MAGIC) {
         printf("invalid msghead magic: 0x%08x\n", msghead->magic);
@@ -762,7 +771,7 @@ static void ss_cli_msgproc(ss_com_inst_t *inst, void *head, void *body)
 
         ret = ss_do_segasm(ctx, msghead, body);
         if (ret) {
-            newdm = ss_metalist_deseri(ctx->segasm.buf, ctx->segasm.len);
+            newdm = ss_metalist_deseri(ctx->u.cli.segasm.buf, ctx->u.cli.segasm.len);
 
             /* do file update */
             ss_do_fileupdate(inst, ctx, ctx->dm, newdm);
@@ -772,8 +781,8 @@ static void ss_cli_msgproc(ss_com_inst_t *inst, void *head, void *body)
             }
             ctx->dm = newdm;
 
-            free(ctx->segasm.buf);
-            memset(&(ctx->segasm), 0, sizeof(ss_segasm_t));
+            free(ctx->u.cli.segasm.buf);
+            memset(&(ctx->u.cli.segasm), 0, sizeof(ss_segasm_t));
         }
 
         break;
@@ -789,10 +798,10 @@ static void ss_cli_msgproc(ss_com_inst_t *inst, void *head, void *body)
 
         ret = ss_do_segasm(ctx, msghead, body);
         if (ret) {
-            ctx->n_update--;
-            fileres = (ss_fileres_t *)(ctx->segasm.buf);
+            ctx->u.cli.n_update--;
+            fileres = (ss_fileres_t *)(ctx->u.cli.segasm.buf);
 
-            SS_ASSERT(msghead->total_len == ctx->segasm.len);
+            SS_ASSERT(msghead->total_len == ctx->u.cli.segasm.len);
             SS_ASSERT(msghead->total_len == (fileres->len + sizeof(ss_fileres_t) + strlen(fileres->name) + 1));
 
             if (!(fileres->flag & SS_FILERES_VALID)) {
@@ -805,11 +814,11 @@ static void ss_cli_msgproc(ss_com_inst_t *inst, void *head, void *body)
                 ss_do_filesave(ctx, fileres);
             }
 
-            free(ctx->segasm.buf);
-            memset(&(ctx->segasm), 0, sizeof(ss_segasm_t));
+            free(ctx->u.cli.segasm.buf);
+            memset(&(ctx->u.cli.segasm), 0, sizeof(ss_segasm_t));
         }
 
-        if (ctx->n_update == 0) {
+        if (ctx->u.cli.n_update == 0) {
             ctx->state = SS_STATE_IDLE;
         }
 

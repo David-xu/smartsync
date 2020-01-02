@@ -136,16 +136,21 @@ typedef struct _ss_ctx {
     ss_nodetype_e       nt;                 /* node type */
     ss_state_e          state;
     char                localpath[SS_MAXPATH_LEN];
-    // char                ip[16];
-    // uint16_t            port;
 
     ss_com_t            com;
 
     ss_dirmeta_t        *dm;                /* local */
     ss_filefilter_t     ff;
 
-    ss_segasm_t         segasm;
-    uint32_t            n_update;
+    union {
+        struct {
+            uint32_t            n_filereq_recv;
+        } srv;
+        struct {
+            ss_segasm_t         segasm;
+            uint32_t            n_update;
+        } cli;
+    } u;
 } ss_ctx_t;
 
 ss_dirmeta_t* path_scan(char *path, ss_filefilter_t *ff);

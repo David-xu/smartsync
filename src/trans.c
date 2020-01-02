@@ -290,10 +290,15 @@ int ss_com_init(ss_com_t *com, ss_nodetype_e type, char *ip, uint16_t port, ss_c
 
 int ss_com_send(ss_com_inst_t *inst, void *buf, uint32_t len)
 {
+    int ret;
     if (inst->type != SS_NODE_CLI) {
         printf("com send err, invalid type: %d\n", inst->type);
         return -1;
     }
 
-    return send(inst->fd, buf, len, 0);
+    ret = send(inst->fd, buf, len, 0);
+
+    SS_ASSERT(ret == len);
+
+    return 0;
 }
