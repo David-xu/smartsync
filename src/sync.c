@@ -137,10 +137,10 @@ _retry:
     return dm;
 }
 
-int ss_dmstate_refresh(ss_ctx_t *ctx, ss_dirmeta_t *dm, int ts_refresh)
+void ss_dmstate_refresh(ss_ctx_t *ctx, ss_dirmeta_t *dm, int ts_srv)
 {
     char pathname[SS_MAXPATH_LEN];
-    int i, ret = 0;
+    int i;
     struct stat fstat;
 
     for (i = 0; i < dm->n_file; i++) {
@@ -150,10 +150,8 @@ int ss_dmstate_refresh(ss_ctx_t *ctx, ss_dirmeta_t *dm, int ts_refresh)
         if (stat(pathname, &fstat)) {
             /* file has been removed */
             memset(&(dm->fml[i]), 0, sizeof(ss_filemeta_t));
-
-            ret++;
         } else {
-            if (ts_refresh) {
+            if (ts_srv) {
                 dm->fml[i].mtime = fstat.st_mtime;
             }
         }
@@ -172,8 +170,6 @@ int ss_dmstate_refresh(ss_ctx_t *ctx, ss_dirmeta_t *dm, int ts_refresh)
     }
 
     dm->crc = alg_crc32(dm->fml, dm->n_file * sizeof(ss_filemeta_t));
-
-    return ret;
 }
 
 /* Serialization */
@@ -508,7 +504,7 @@ static void ss_srv_msgproc(ss_com_inst_t *inst, void *head, void *body)
 
         ss_send_file_res(inst, filereq);
 
-        ctx->u.srv.n_filereq_recv = 5;
+        ctx->u.srv.n_filereq_recv = 2;
 
         break;
     }
@@ -658,7 +654,7 @@ __do_filesync:
 
 static int ss_do_filesave(ss_ctx_t *ctx, ss_fileres_t *fileres)
 {
-    int i, ret;
+    int len, ret, fml_idx;
     char pathname[SS_MAXPATH_LEN];
     char dirname[SS_MAXPATH_LEN];
     char cmd[SS_MAXPATH_LEN + 32];
@@ -667,31 +663,29 @@ static int ss_do_filesave(ss_ctx_t *ctx, ss_fileres_t *fileres)
 
     SS_ASSERT(ctx->dm);
 
-    for (i = 0; i < ctx->dm->n_file; i++) {
-        if (strcmp(fileres->name, ctx->dm->fml[i].name) == 0) {
+    for (fml_idx = 0; fml_idx < ctx->dm->n_file; fml_idx++) {
+        if (strcmp(fileres->name, ctx->dm->fml[fml_idx].name) == 0) {
             break;
         }
     }
-    if (i == ctx->dm->n_file) {
-        printf("invalid....\n");
-    }
-    SS_ASSERT(i != ctx->dm->n_file);
+
+    SS_ASSERT(fml_idx != ctx->dm->n_file);
 
     /* save new time stamp */
-    ctx->dm->fml[i].mtime = fileres->mtime;
+    ctx->dm->fml[fml_idx].mtime = fileres->mtime;
 
     /* savefile */
     memset(pathname, 0, sizeof(pathname));
     sprintf(pathname, "%s/%s", ctx->localpath, fileres->name);
 
     /* mkdir */
-    i = strlen(pathname) - 1;
-    while ((i) && (pathname[i] != '/')) {
-        i--;
+    len = strlen(pathname) - 1;
+    while ((len) && (pathname[len] != '/')) {
+        len--;
     }
-    SS_ASSERT(i);
+    SS_ASSERT(len);
     memset(dirname, 0, sizeof(dirname));
-    memcpy(dirname, pathname, i);
+    memcpy(dirname, pathname, len);
 
     if (access((const char *)dirname, F_OK)) {
         sprintf(cmd, "mkdir -p %s", dirname);
@@ -705,9 +699,16 @@ static int ss_do_filesave(ss_ctx_t *ctx, ss_fileres_t *fileres)
     src += strlen(fileres->name) + 1;
 
     fp = fopen(pathname, "wb");
+    if (fp == NULL) {
+        printf("savefile: open %s faild.\n", pathname);
+        return 0;
+    }
     SS_ASSERT(fp);
     fwrite(src, 1, fileres->len, fp);
     fclose(fp);
+
+    /* update timestamp */
+
 
     return 0;
 }
@@ -845,9 +846,7 @@ static void ss_com_cb_cli(ss_com_inst_t *inst, ss_cbtype_e cbt, void *head, void
         com->loop = 0;
     } else if (cbt == SS_CBTYPE_TIMER) {
         if ((ctx->dm) && (ctx->state == SS_STATE_IDLE)) {
-            if (ss_dmstate_refresh(ctx, ctx->dm, 0)) {
-                printf("dm changed, need update file...\n");
-            }
+            ss_dmstate_refresh(ctx, ctx->dm, 0);
         }
     }
 }

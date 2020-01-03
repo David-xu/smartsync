@@ -139,7 +139,7 @@ typedef struct _ss_ctx {
 
     ss_com_t            com;
 
-    ss_dirmeta_t        *dm;                /* local */
+    ss_dirmeta_t        *dm;
     ss_filefilter_t     ff;
 
     union {
